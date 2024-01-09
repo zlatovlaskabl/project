@@ -1,0 +1,130 @@
+
+from PyQt5 import QtWidgets, uic
+from PyQt5.QtCore import QTimer
+from PyQt5.QtGui import QImage, QPixmap
+import cv2
+import numpy as np
+import tensorflow as tf
+import sys
+
+
+class Interfata(QtWidgets.QMainWindow):
+    def __init__(self):
+        super(Interfata, self).__init__()
+        uic.loadUi('interfata.ui', self)
+
+        self.start_camera.clicked.connect(self.start_video)
+        self.stop_camera.clicked.connect(self.stop_video)
+
+        # Load TFLite model
+        self.model_path = 'C:\\Users\\ester\\PycharmProjects\\proiectpt2\\domino.tflite'
+        self.interpreter = self.load_model(self.model_path)
+
+        self.video_capture = None
+        self.timer = QTimer(self)
+        self.timer.timeout.connect(self.update_frame)
+
+    def start_video(self):
+        self.video_capture = cv2.VideoCapture(0)
+        self.timer.start(30)
+
+    def stop_video(self):
+        if self.video_capture is not None and self.video_capture.isOpened():
+            self.video_capture.release()
+        self.timer.stop()
+
+    def update_frame(self):
+        ret, frame = self.video_capture.read()
+        if ret:
+            processed_frame = self.detect_objects(frame)
+            height, width, channel = processed_frame.shape
+            bytes_per_line = 3 * width
+            q_image = QImage(processed_frame.data, width, height, bytes_per_line, QImage.Format_RGB888).rgbSwapped()
+            pixmap = QPixmap.fromImage(q_image)
+            self.label_2.setPixmap(pixmap)
+            self.label_2.setScaledContents(True)
+
+    def load_model(self, model_path):
+        interpreter = tf.lite.Interpreter(model_path=model_path)
+        interpreter.allocate_tensors()
+        return interpreter
+
+    def detect_objects(self, frame):
+        input_tensor = self.interpreter.tensor(self.interpreter.get_input_details()[0]['index'])
+        output = self.interpreter.tensor(self.interpreter.get_output_details()[0]['index'])
+
+        # Preprocesare: Redimensionează imaginea la dimensiunile așteptate de model (320x320)
+        preprocessed_frame = cv2.resize(frame, (320, 320))
+
+        # Converteste imaginea la formatul așteptat de model, dacă este necesar
+        preprocessed_frame = self.preprocess_frame(preprocessed_frame)
+
+        # Setează valorile tensorului de intrare cu imaginea preprocesată
+        input_tensor()[0][:, :, :] = preprocessed_frame
+
+        # Rulează inferența
+        self.interpreter.invoke()
+
+        # Obține rezultatele
+        output_values = output()
+
+        # Postprocesare: Extrage informațiile despre obiecte detectate
+        detected_objects = self.postprocess_output(output_values)
+
+        # Desenează dreptunghiurile în jurul obiectelor detectate
+        self.draw_rectangles(frame, detected_objects)
+
+        return frame
+
+    def preprocess_frame(self, frame):
+        # Logica ta de preprocesare a imaginii aici
+        # Redimensionare, normalizare, conversie de culori, etc.
+
+        # Redimensionează la dimensiunea așteptată de model (160x160)
+        resized_frame = cv2.resize(frame, (320, 320))
+
+        # Normalizare a pixelilor la intervalul [0, 1]
+        normalized_frame = resized_frame / 255.0
+
+        # Redimensionează și aplatizează imaginea pentru a se potrivi cu modelul
+        reshaped_frame = normalized_frame.reshape((1, 320, 320, 3))
+
+        return reshaped_frame
+
+    def postprocess_output(self, output):
+        # Extrage și interpretează informațiile despre obiectele detectate
+        # Aceasta este o implementare de bază și poate necesita ajustări în funcție de modelul tău
+        detected_objects = []
+
+        # Obține informații despre șabloanele modelului
+        boxes = self.interpreter.get_output_details()[0]['index']
+        classes = self.interpreter.get_output_details()[1]['index']
+        scores = self.interpreter.get_output_details()[2]['index']
+        num_detections = int(self.interpreter.get_output_details()[3]['shape'][1])
+
+
+        num_boxes = int(output[0, 0])  # Presupunând că numărul de cutii este pe prima poziție
+
+        for i in range(num_boxes):
+            box = output[0, i, boxes:boxes + 4]
+            class_id = int(output[0, i, classes])
+            score = output[0, i, scores]
+
+            if score > 0.4:  # Setează un prag pentru scorul de încredere
+                detected_objects.append({'box': box, 'class_id': class_id, 'score': score})
+
+        return detected_objects
+
+    def draw_rectangles(self, frame, detected_objects):
+        # Desenează dreptunghiurile în jurul obiectelor detectate pe frame
+        for obj in detected_objects:
+            xmin, ymin, xmax, ymax = obj['box']
+            score = obj['score']
+            print(f"Class ID: {obj['class_id']}, Score: {score}")
+            cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
+
+if __name__ == '__main__':
+    app = QtWidgets.QApplication(sys.argv)
+    window = Interfata()
+    window.show()
+    sys.exit(app.exec_())
